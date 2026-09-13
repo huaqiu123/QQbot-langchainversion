@@ -1,0 +1,23 @@
+# ---------- Web ----------
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+
+# ---------- 配置 ----------
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+python-dotenv>=1.0.0
+
+# ---------- HTTP ----------
+httpx>=0.27.0
+
+# ---------- 搜索 ----------
+ddgs>=9.0.0
+
+# ---------- LangChain / LangGraph ----------
+langchain>=1.0.0
+langchain-deepseek>=0.1.0
+langgraph>=1.0.0
+langchain-core>=1.0.0
+
+# ---------- 可选：链路追踪 ----------
+# langsmith>=0.1.0
