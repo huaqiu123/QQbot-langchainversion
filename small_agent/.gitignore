@@ -16,3 +16,6 @@ env/
 .mypy_cache/
 
 *.log
+
+
+
