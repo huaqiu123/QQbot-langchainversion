@@ -339,8 +339,8 @@ class Agent:
         if not results:
             return None
         lines = []
-        for i, r in enumerate(results, 1):
-            lines.append(f"[{i}] {r['content']}")
+        for r in results:
+            lines.append(r['content'])
         return "\n".join(lines)
 
     # ---------------- 输入组装 ----------------
