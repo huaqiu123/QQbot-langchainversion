@@ -21,3 +21,7 @@ langchain-core>=1.0.0
 
 # ---------- 可选：链路追踪 ----------
 # langsmith>=0.1.0
+
+# ---------- 知识库（RAG） ----------
+chromadb>=1.5.0
+langchain-chroma>=0.1.0

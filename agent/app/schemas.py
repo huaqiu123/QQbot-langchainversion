@@ -110,3 +110,41 @@ class HealthResponse(BaseModel):
     agent_impl: str = ""
     graph_ready: bool = False
     llm_configured: bool = False
+    knowledge_available: bool = False
+    knowledge_chunks: int = 0
+
+
+class KnowledgeIngestRequest(BaseModel):
+    """`POST /knowledge/ingest` 请求体。
+
+    Attributes:
+        content: 要写入知识库的文本内容。
+        metadata: 附加元数据（可选），如 ``{"group_id": "123", "sender_id": "user_001"}``。
+    """
+
+    content: str = Field(..., min_length=1, description="知识文本")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="附加元数据")
+
+
+class KnowledgeIngestResponse(BaseModel):
+    """`POST /knowledge/ingest` 响应体。
+
+    Attributes:
+        chunk_count: 本次写入的分块数。
+        total_chunks: 知识库当前总块数。
+    """
+
+    chunk_count: int = 0
+    total_chunks: int = 0
+
+
+class KnowledgeStatusResponse(BaseModel):
+    """`GET /knowledge/status` 响应体。
+
+    Attributes:
+        available: 知识库是否可用（配置了 Embedding API Key）。
+        chunk_count: 知识库当前总块数。
+    """
+
+    available: bool = False
+    chunk_count: int = 0

@@ -1,0 +1,12 @@
+id=1, content=Small Agent 是一个基于 LangChain 和 DeepSeek 构建的可联网问答机器人，版本号为 2.0.0。它支持知识库检索功能，可以将群消息持久化存储并用于后续问答。, metadata={"group_id": "test_group", "sender_id": "test_user"}, created_at=2026-09-16 13:09:09
+id=2, content=Small Agent 是一个基于 LangChain 和 DeepSeek 构建的可联网问答机器人，版本号为 2.0.0。它支持知识库检索功能，可以将群消息持久化存储并用于后续问答。知识库基于 Chroma 向量数据库和 BGE 嵌入模型实现，支持相似度检索。, metadata={"group_id": "test_group", "sender_id": "test_user"}, created_at=2026-09-16 13:13:25
+id=3, content=Small Agent 是一个基于 LangChain 和 DeepSeek 构建的可联网问答机器人，版本号为 2.0.0。它支持知识库检索功能，可以将群消息持久化存储并用于后续问答。知识库基于 Chroma 向量数据库和 BGE 嵌入模型实现，支持相似度检索。, metadata={"group_id": "test_group", "sender_id": "test_user"}, created_at=2026-09-16 13:13:45
+id=4, content=Small Agent 是一个基于 LangChain 和 DeepSeek 构建的可联网问答机器人，版本号为 2.0.0。它支持知识库检索功能，可以将群消息持久化存储并用于后续问答。知识库基于 Chroma 向量数据库和 BGE 嵌入模型实现，支持相似度检索。, metadata={"group_id": "test_group", "sender_id": "test_user"}, created_at=2026-09-16 13:14:29
+id=5, content=Small Agent 是一个基于 LangChain 和 DeepSeek 构建的可联网问答机器人，版本号为 2.0.0。它支持知识库检索功能，可以将群消息持久化存储并用于后续问答。知识库基于 Chroma 向量数据库和 BGE 嵌入模型实现，支持相似度检索。, metadata={"group_id": "test_group", "sender_id": "test_user"}, created_at=2026-09-16 13:14:42
+id=6, content=Small Agent 是一个基于 LangChain 和 DeepSeek 构建的可联网问答机器人，版本号为 2.0.0。它支持知识库检索功能，可以将群消息持久化存储并用于后续问答。知识库基于 Chroma 向量数据库和 BGE 嵌入模型实现，支持相似度检索。, metadata={"group_id": "test_group", "sender_id": "test_user"}, created_at=2026-09-16 13:18:24
+id=7, content=项目使用 pip 管理依赖，无需 uv 或 poetry。主要依赖包括 langchain、langchain-deepseek、chromadb 等。, metadata={"group_id": "test_group", "sender_id": "admin"}, created_at=2026-09-16 13:18:29
+id=8, content=测试知识库搜索功能 - 验证相似度归一化, metadata={"group_id": "test"}, created_at=2026-09-16 13:23:05
+id=9, content=Small Agent 是一个基于 LangChain 和 DeepSeek 构建的可联网问答机器人，版本号为 2.0.0。它支持知识库检索功能，可以将群消息持久化存储并用于后续问答。识库基于 Chroma 向量数据库和 BGE 嵌入模型实现，支持相似度检索。邱伟华是武汉大学学生, metadata={"group_id": "test_group", "sender_id": "test_user"}, created_at=2026-09-16 13:33:50
+id=10, content=项目使用 pip 管理依赖，无需 uv 或 poetry。主要依赖包括 langchain、langchain-deepseek、chromadb 等。, metadata={"group_id": "test_group", "sender_id": "admin"}, created_at=2026-09-16 13:33:55
+id=11, content=邱伟华是武汉大学学生，就读于计算机学院。, metadata={"group_id": "test", "sender_id": "admin"}, created_at=2026-09-16 13:46:47
+id=12, content=邱伟华是武汉大学学生，就读于计算机学院。, metadata={"group_id": "test"}, created_at=2026-09-16 13:47:03

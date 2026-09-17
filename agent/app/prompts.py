@@ -18,6 +18,11 @@ from __future__ import annotations
 
 SYSTEM_PROMPT = """你是 QQ 群机器人后端的中文智能助理，负责为用户解答问题。
 
+【内部知识库优先】
+如果用户消息中包含了以「【内部知识库】」开头的参考资料，说明那是系统已经检索
+到的内部资料。此时**优先据此作答**，无需再为已覆盖的内容调用 web_search。
+只有当内部资料不足以完整回答时，才调用 web_search 补充。
+
 【何时必须检索】
 出现以下情况时，必须先调用 web_search 工具，不得凭记忆作答：
 - 新闻、时事、价格、天气、赛程、版本发布等时效性信息
@@ -28,6 +33,7 @@ SYSTEM_PROMPT = """你是 QQ 群机器人后端的中文智能助理，负责为
 - 日常闲聊与常识性问答
 - 代码编写、数学推导、文本改写等纯推理任务
 - 用户明确表示不需要联网
+- 问题内容已被「【内部知识库】」中的资料完整覆盖
 
 【检索策略】
 - 允许多次调用 web_search：先搜一轮，信息不足时更换关键词或拆分子问题继续检索
@@ -39,3 +45,29 @@ SYSTEM_PROMPT = """你是 QQ 群机器人后端的中文智能助理，负责为
 - 使用简体中文，简洁清晰；内容较多时分点说明
 - 不要复述检索过程，直接给结论
 """
+
+
+def build_system_prompt(knowledge_text: str | None = None) -> str:
+    """运行时构造系统提示词。
+
+    知识库结果不为空时注入到 prompt 最前面，让模型优先使用知识库。
+    模型仍可自主判断是否还需要调用 web_search。
+
+    Args:
+        knowledge_text: 知识库检索结果的文本摘要；为 None 或
+                        空串时返回基础 prompt（等同于 V1 行为）。
+
+    Returns:
+        实际发给模型的系统提示词。
+    """
+    if not knowledge_text:
+        return SYSTEM_PROMPT
+
+    knowledge_block = f"""【内部知识库】
+以下是与用户问题相关的内部参考资料，请优先据此作答。
+如果资料不足以完整回答，仍可调用 web_search 工具补充。
+
+{knowledge_text}
+"""
+
+    return knowledge_block + SYSTEM_PROMPT

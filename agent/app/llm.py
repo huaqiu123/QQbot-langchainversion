@@ -17,6 +17,7 @@ import logging
 from functools import lru_cache
 
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.embeddings import Embeddings
 
 from .config import Settings, get_settings
 
@@ -113,3 +114,31 @@ def get_chat_model() -> BaseChatModel:
         RuntimeError: 未配置 ``DEEPSEEK_API_KEY`` 时抛出。
     """
     return build_chat_model(get_settings())
+
+
+def build_embeddings(settings: Settings) -> Embeddings | None:
+    """构造 Embeddings 客户端（SiliconFlow / OpenAI 兼容 API）。
+
+    未配置 EMBEDDING_API_KEY 时返回 None，外层 knowledge.py
+    据此将 available 置为 False。
+
+    Args:
+        settings: 全局配置。
+
+    Returns:
+        Embeddings 实例，或 None（未配置时）。
+    """
+    if not settings.embedding_api_key.strip():
+        return None
+
+    try:
+        from langchain_openai import OpenAIEmbeddings
+    except ImportError:
+        logger.warning("langchain-openai 未安装，Embedding 功能不可用")
+        return None
+
+    return OpenAIEmbeddings(
+        model=settings.embedding_model,
+        api_key=settings.embedding_api_key,
+        base_url=settings.embedding_base_url,
+    )

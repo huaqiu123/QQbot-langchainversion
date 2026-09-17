@@ -41,7 +41,17 @@ from fastapi.responses import StreamingResponse
 from . import __version__
 from .agent import Agent
 from .config import Settings, get_settings
-from .schemas import AskRequest, AskResponse, HealthResponse
+from .database import MessageStore
+from .knowledge import KnowledgeBase
+from .llm import build_embeddings
+from .schemas import (
+    AskRequest,
+    AskResponse,
+    HealthResponse,
+    KnowledgeIngestRequest,
+    KnowledgeIngestResponse,
+    KnowledgeStatusResponse,
+)
 from .search import build_search_provider
 
 logging.basicConfig(
@@ -95,8 +105,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.settings = settings
     app.state.search_provider = provider
 
+    # V2：知识库初始化
+    knowledge_base = None
+    message_store = None
+    if embedding_func := build_embeddings(settings):
+        try:
+            message_store = MessageStore(settings.knowledge_db_path)
+            knowledge_base = KnowledgeBase(
+                persist_dir=settings.chroma_persist_dir,
+                embedding_func=embedding_func,
+                similarity_threshold=settings.knowledge_similarity_threshold,
+                search_top_k=settings.knowledge_search_top_k,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("知识库初始化失败：%s", exc)
+    app.state.knowledge_base = knowledge_base
+    app.state.message_store = message_store
+
     try:
-        app.state.agent = Agent(settings, provider)
+        app.state.agent = Agent(settings, provider, knowledge_base)
         app.state.agent_error = None
         logger.info(
             "Agent 就绪 | 实现=%s | 模型=%s | 搜索=%s | 工具数=%d",
@@ -220,6 +247,7 @@ async def health(request: Request) -> HealthResponse:
     settings = get_settings()
     agent = getattr(request.app.state, "agent", None)
     provider = getattr(request.app.state, "search_provider", None)
+    kb = getattr(request.app.state, "knowledge_base", None)
 
     return HealthResponse(
         status="ok" if agent else "degraded",
@@ -228,6 +256,8 @@ async def health(request: Request) -> HealthResponse:
         agent_impl=agent.impl if agent else "",
         graph_ready=agent is not None,
         llm_configured=settings.is_llm_configured(),
+        knowledge_available=(kb is not None and kb.available) if kb else False,
+        knowledge_chunks=kb.get_chunk_count() if (kb and kb.available) else 0,
     )
 
 
@@ -352,3 +382,108 @@ if __name__ == "__main__":
 
     _settings = get_settings()
     uvicorn.run("app.main:app", host=_settings.host, port=_settings.port, reload=False)
+
+
+# --------------------------------------------------------------------------- #
+# 知识库路由（V2）
+# --------------------------------------------------------------------------- #
+
+
+@app.post(
+    "/knowledge/ingest",
+    response_model=KnowledgeIngestResponse,
+    tags=["knowledge"],
+    dependencies=[Depends(require_api_key)],
+)
+async def ingest(payload: KnowledgeIngestRequest, request: Request) -> KnowledgeIngestResponse:
+    """写入文本到知识库。
+
+    将文本分块后写入 Chroma 向量库与 SQLite 原文存储。
+    Embedding API Key 未配置时返回 503。
+
+    Args:
+        payload: 知识文本与元数据。
+        request: 当前请求。
+
+    Returns:
+        写入的分块数与总块数。
+    """
+    knowledge_base = getattr(request.app.state, "knowledge_base", None)
+    message_store = getattr(request.app.state, "message_store", None)
+
+    if not knowledge_base or not knowledge_base.available:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="知识库未就绪（未配置 EMBEDDING_API_KEY 或初始化失败）",
+        )
+
+    content = payload.content
+    metadata = payload.metadata
+    chunk_size = get_settings().knowledge_chunk_size
+    overlap = get_settings().knowledge_chunk_overlap
+
+    chunks = split_text(content, chunk_size, overlap)
+    if not chunks:
+        return KnowledgeIngestResponse(chunk_count=0, total_chunks=0)
+
+    # 写入 SQLite
+    source_id = None
+    if message_store:
+        source_id = message_store.insert(content, metadata)
+
+    # 写入 Chroma，携带 source_id
+    metadatas = [{**metadata, "source_id": source_id} if source_id else metadata] * len(chunks)
+    knowledge_base.add_texts(chunks, metadatas)
+
+    total = knowledge_base.get_chunk_count()
+    return KnowledgeIngestResponse(chunk_count=len(chunks), total_chunks=total)
+
+
+@app.get(
+    "/knowledge/status",
+    response_model=KnowledgeStatusResponse,
+    tags=["knowledge"],
+    dependencies=[Depends(require_api_key)],
+)
+async def knowledge_status(request: Request) -> KnowledgeStatusResponse:
+    """查询知识库状态。
+
+    Returns:
+        可用状态与总块数。
+    """
+    knowledge_base = getattr(request.app.state, "knowledge_base", None)
+    if not knowledge_base or not knowledge_base.available:
+        return KnowledgeStatusResponse(available=False, chunk_count=0)
+
+    try:
+        chunk_count = knowledge_base.get_chunk_count()
+    except Exception:
+        chunk_count = 0
+    return KnowledgeStatusResponse(available=True, chunk_count=chunk_count)
+
+
+def split_text(text: str, chunk_size: int = 256, overlap: int = 32) -> list[str]:
+    """将文本分割成重叠块。
+
+    Args:
+        text: 输入文本。
+        chunk_size: 每块最大字符数。
+        overlap: 相邻块重叠字符数。
+
+    Returns:
+        文本块列表。输入为空时返回空列表。
+    """
+    if not text:
+        return []
+    if len(text) <= chunk_size:
+        return [text]
+
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = min(start + chunk_size, len(text))
+        chunks.append(text[start:end])
+        if end == len(text):
+            break
+        start += chunk_size - overlap
+    return chunks

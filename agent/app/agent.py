@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from langchain_core.messages import (
     AIMessage,
@@ -29,10 +29,13 @@ from langchain_core.messages import (
 
 from .config import Settings
 from .llm import build_chat_model, model_name, validate_model
-from .prompts import SYSTEM_PROMPT
+from .prompts import build_system_prompt
 from .schemas import ChatMessage, Source
 from .search import SearchProvider
 from .tools import build_tools
+
+if TYPE_CHECKING:
+    from .knowledge import KnowledgeBase
 
 logger = logging.getLogger(__name__)
 
@@ -246,7 +249,12 @@ class Agent:
         graph_plain: 不带工具的图；``use_search=False`` 时走这张，Agent 退化为纯对话。
     """
 
-    def __init__(self, settings: Settings, search_provider: SearchProvider) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        search_provider: SearchProvider,
+        knowledge_base: KnowledgeBase | None = None,
+    ) -> None:
         """构造 Agent 并编译图。
 
         编译两张图的代价很低（模型与工具实例是复用的），换来的是
@@ -255,12 +263,14 @@ class Agent:
         Args:
             settings: 全局配置。
             search_provider: 已就绪的搜索源实例。
+            knowledge_base: 知识库实例（可选），传入后 Agent 会在回答前先查知识库。
 
         Raises:
             RuntimeError: 未配置 ``DEEPSEEK_API_KEY`` 时由 `build_chat_model` 抛出。
         """
         self.settings = settings
         self.search_provider = search_provider
+        self.knowledge_base = knowledge_base
         self.model_name = model_name(settings)
 
         self.model = build_chat_model(settings)
@@ -283,14 +293,15 @@ class Agent:
         Returns:
             编译好的 LangGraph 图对象，可直接 ``ainvoke`` / ``astream``。
         """
+        prompt = build_system_prompt()
         if self.impl == "create_agent":
             return self._create_fn(
                 model=self.model,
                 tools=tools,
-                system_prompt=SYSTEM_PROMPT,
+                system_prompt=prompt,
                 middleware=_build_middleware(),
             )
-        return self._create_fn(model=self.model, tools=tools, prompt=SYSTEM_PROMPT)
+        return self._create_fn(model=self.model, tools=tools, prompt=prompt)
 
     def _pick_graph(self, use_search: Optional[bool]) -> Any:
         """按请求参数选择要执行的图。
@@ -306,6 +317,32 @@ class Agent:
             return self.graph_plain
         return self.graph
 
+    # ---------------- 知识库检索 ----------------
+
+    async def _knowledge_search(self, question: str) -> str | None:
+        """查询知识库，返回格式化后的文本块。知识库不可用或未命中时返回 None。
+
+        Args:
+            question: 用户问题。
+
+        Returns:
+            格式化知识文本，或 None。
+        """
+        kb = self.knowledge_base
+        if kb is None or not kb.available:
+            return None
+        try:
+            results = kb.search(question)
+        except Exception as exc:
+            logger.warning("知识库检索失败: %s", exc)
+            return None
+        if not results:
+            return None
+        lines = []
+        for i, r in enumerate(results, 1):
+            lines.append(f"[{i}] {r['content']}")
+        return "\n".join(lines)
+
     # ---------------- 输入组装 ----------------
 
     def _build_messages(
@@ -313,6 +350,7 @@ class Agent:
         question: str,
         history: Optional[List[ChatMessage]],
         extra_context: Optional[str],
+        knowledge_text: str | None = None,
     ) -> List[BaseMessage]:
         """把请求参数转换成 LangChain 消息列表。
 
@@ -323,6 +361,7 @@ class Agent:
             question: 用户问题。
             history: 历史消息（由调用方维护）。
             extra_context: 附加到问题末尾的补充上下文。
+            knowledge_text: 知识库检索结果文本，不为空时注入到提问中。
 
         Returns:
             转换后的消息列表，最后一条固定为本次提问。
@@ -345,7 +384,10 @@ class Agent:
             elif item.role == "assistant":
                 messages.append(AIMessage(content=item.content))
 
+        # 知识库结果注入
         text = question.strip()
+        if knowledge_text:
+            text = f"【内部知识库】\n{knowledge_text}\n\n【用户问题】\n{text}"
         if extra_context and extra_context.strip():
             text = f"{text}\n\n[补充上下文]\n{extra_context.strip()}"
         messages.append(HumanMessage(content=text))
@@ -379,7 +421,8 @@ class Agent:
             `RECURSION_ANSWER` 兜底话术，保证调用方始终能拿到可用响应。
         """
         graph = self._pick_graph(use_search)
-        messages = self._build_messages(question, history, extra_context)
+        knowledge_text = await self._knowledge_search(question)
+        messages = self._build_messages(question, history, extra_context, knowledge_text)
         config = {"recursion_limit": self.settings.recursion_limit}
         started = time.perf_counter()
 
@@ -460,7 +503,8 @@ class Agent:
             「不带 tool_calls 的纯文本增量」，避免把中间态的碎文本透给前端。
         """
         graph = self._pick_graph(use_search)
-        messages = self._build_messages(question, history, extra_context)
+        knowledge_text = await self._knowledge_search(question)
+        messages = self._build_messages(question, history, extra_context, knowledge_text)
         config = {"recursion_limit": self.settings.recursion_limit}
 
         answer_parts: List[str] = []

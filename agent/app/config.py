@@ -72,6 +72,17 @@ class Settings(BaseSettings):
     max_history_messages: int = 10
     request_timeout: float = 120.0
 
+    # ---------- 知识库（Embedding + 向量检索） ----------
+    embedding_api_key: str = ""
+    embedding_model: str = "BAAI/bge-m3"
+    embedding_base_url: str = "https://api.siliconflow.cn/v1"
+    chroma_persist_dir: str = "data/chroma"
+    knowledge_db_path: str = "data/knowledge.db"
+    knowledge_similarity_threshold: float = 0.7
+    knowledge_search_top_k: int = 5
+    knowledge_chunk_size: int = 256
+    knowledge_chunk_overlap: int = 32
+
     # ---------- LangSmith（可选） ----------
     langsmith_tracing: bool = False
     langsmith_api_key: str = ""
