@@ -30,7 +30,7 @@ from langchain_core.messages import (
 from .config import Settings
 from .llm import build_chat_model, model_name, validate_model
 from .prompts import build_system_prompt
-from .schemas import ChatMessage, Source
+from .schemas import Source
 from .search import SearchProvider
 from .tools import build_tools
 
@@ -82,14 +82,20 @@ def _resolve_create_agent() -> Tuple[Any, str]:
         return create_react_agent, "create_react_agent"
 
 
-def _build_middleware() -> List[Any]:
+def _build_middleware(max_messages: int = 0) -> List[Any]:
     """构造 Agent 中间件列表。
 
-    当前只挂一个**工具异常兜底中间件**：工具抛异常时返回一条说明性的
-    ``ToolMessage``，让模型据此如实告知用户，而不是让异常穿透整张图导致请求 500。
+    中间件按顺序执行：
 
-    若当前 LangChain 版本没有 middleware API，则返回空列表静默降级 ——
-    主流程仍可运行，只是失去这层兜底（`tools.py` 内部也有异常收敛作为第二道防线）。
+    1. **消息裁剪中间件**：当 ``max_messages > 0`` 时在 LLM 调用前截断消息列表，
+       只保留最近 N 条，防止上下文超出窗口。checkpointer 中仍存储全量消息。
+    2. **工具异常兜底中间件**：工具抛异常时返回一条说明性的 ``ToolMessage``，
+       让模型据此如实告知用户，而不是让异常穿透整张图导致请求 500。
+
+    若当前 LangChain 版本没有 middleware API，则返回空列表静默降级。
+
+    Args:
+        max_messages: LLM 每次调用时保留的最大消息条数；<= 0 表示不裁剪。
 
     Returns:
         中间件列表，可能为空。
@@ -99,6 +105,27 @@ def _build_middleware() -> List[Any]:
     except ImportError:  # pragma: no cover
         logger.debug("当前 LangChain 版本无 middleware API，跳过工具异常中间件")
         return []
+
+    middlewares: List[Any] = []
+
+    # 消息裁剪中间件：在 LLM 调用前截断消息列表
+    if max_messages > 0:
+        try:
+            from langchain.agents.middleware import before_model
+
+            @before_model
+            def trim_messages(state: Any, runtime: Any) -> Any:
+                """LLM 调用前裁剪消息列表到最近 N 条。"""
+                msgs = state.get("messages", [])
+                if len(msgs) > max_messages:
+                    state["messages"] = msgs[-max_messages:]
+                return state
+
+            middlewares.append(trim_messages)
+            logger.debug("消息裁剪中间件已启用 max_messages=%d", max_messages)
+        except ImportError:  # pragma: no cover
+            logger.debug("当前 LangChain 版本无 before_model 钩子，跳过消息裁剪")
+            pass
 
     @wrap_tool_call
     async def handle_tool_errors(request: Any, handler: Any) -> Any:
@@ -116,7 +143,8 @@ def _build_middleware() -> List[Any]:
                 tool_call_id=tool_call.get("id", ""),
             )
 
-    return [handle_tool_errors]
+    middlewares.append(handle_tool_errors)
+    return middlewares
 
 
 # --------------------------------------------------------------------------- #
@@ -254,6 +282,7 @@ class Agent:
         settings: Settings,
         search_provider: SearchProvider,
         knowledge_base: KnowledgeBase | None = None,
+        checkpointer: Any | None = None,
     ) -> None:
         """构造 Agent 并编译图。
 
@@ -264,6 +293,8 @@ class Agent:
             settings: 全局配置。
             search_provider: 已就绪的搜索源实例。
             knowledge_base: 知识库实例（可选），传入后 Agent 会在回答前先查知识库。
+            checkpointer: LangGraph 持久化存储（AsyncSqliteSaver 等），传入后
+                Agent 会自动按 ``thread_id`` 保存/加载对话历史；为 None 时不持久化。
 
         Raises:
             RuntimeError: 未配置 ``DEEPSEEK_API_KEY`` 时由 `build_chat_model` 抛出。
@@ -271,6 +302,7 @@ class Agent:
         self.settings = settings
         self.search_provider = search_provider
         self.knowledge_base = knowledge_base
+        self.checkpointer = checkpointer
         self.model_name = model_name(settings)
 
         self.model = build_chat_model(settings)
@@ -287,20 +319,36 @@ class Agent:
     def _compile(self, tools: List[Any]) -> Any:
         """编译一张 Agent 图。
 
+        核心作用：把 model + tools + system_prompt 编译成一张可执行的
+        LangGraph 状态图。编译结果缓存在 ``self.graph`` / ``self.graph_plain`` 中，
+        整个进程生命周期内只编译一次。
+
+        ``create_agent``（LangChain 1.x）与 ``create_react_agent``（LangGraph 旧版）
+        的参数名不同：前者用 ``system_prompt``，后者用 ``prompt``。通过 ``self.impl``
+        区分两个分支，保证兼容性。
+
         Args:
             tools: 要绑定的工具列表，空列表表示纯对话模式。
 
         Returns:
             编译好的 LangGraph 图对象，可直接 ``ainvoke`` / ``astream``。
         """
+        # 从 prompts.py 获取系统提示词，控制模型的行为边界与工具使用策略
         prompt = build_system_prompt()
         if self.impl == "create_agent":
-            return self._create_fn(
+            # LangChain >= 1.0：原生 API，参数名为 system_prompt
+            # middleware 列表中包含联网检测、错误屏蔽等运行时中间件
+            kwargs: Dict[str, Any] = dict(
                 model=self.model,
                 tools=tools,
                 system_prompt=prompt,
-                middleware=_build_middleware(),
+                middleware=_build_middleware(max_messages=self.settings.max_history_messages),
             )
+            # checkpointer 为 None 时直接忽略，create_agent 行为不变
+            if self.checkpointer is not None:
+                kwargs["checkpointer"] = self.checkpointer
+            return self._create_fn(**kwargs)
+        # LangGraph prebuilt 回退：参数名为 prompt，不支持 middleware
         return self._create_fn(model=self.model, tools=tools, prompt=prompt)
 
     def _pick_graph(self, use_search: Optional[bool]) -> Any:
@@ -345,60 +393,38 @@ class Agent:
 
     # ---------------- 输入组装 ----------------
 
-    def _build_messages(
+    def _build_input(
         self,
         question: str,
-        history: Optional[List[ChatMessage]],
-        extra_context: Optional[str],
+        extra_context: Optional[str] = None,
         knowledge_text: str | None = None,
     ) -> List[BaseMessage]:
-        """把请求参数转换成 LangChain 消息列表。
+        """把请求参数转换成本轮的 LangChain 消息。
 
-        历史裁剪在这里做（而不是靠中间件改图状态），原因是这样行为确定、易调试：
-        只取最后 ``max_history_messages`` 条，且 ``<= 0`` 时视为不限制。
+        历史消息由 checkpointer 自动管理，本方法只负责注入知识库结果和
+        extra_context 到当轮 HumanMessage 中。
 
         Args:
             question: 用户问题。
-            history: 历史消息（由调用方维护）。
             extra_context: 附加到问题末尾的补充上下文。
-            knowledge_text: 知识库检索结果文本，不为空时注入到提问中。
+            knowledge_text: 知识库检索结果文本，不为空时注入到提问开头。
 
         Returns:
-            转换后的消息列表，最后一条固定为本次提问。
-
-        Note:
-            历史中的 ``system`` 角色会被**忽略** —— 系统提示词由 `create_agent`
-            通过 ``system_prompt`` 参数统一注入，重复注入会干扰模型。
+            单条 HumanMessage 组成的列表。
         """
-        messages: List[BaseMessage] = []
-
-        # 历史里的 system 角色会被忽略：system 提示词由 create_agent 统一注入
-        items = history or []
-        limit = self.settings.max_history_messages
-        if limit > 0:
-            items = items[-limit:]
-
-        for item in items:
-            if item.role == "user":
-                messages.append(HumanMessage(content=item.content))
-            elif item.role == "assistant":
-                messages.append(AIMessage(content=item.content))
-
-        # 知识库结果注入
         text = question.strip()
         if knowledge_text:
             text = f"【内部知识库】\n{knowledge_text}\n\n【用户问题】\n{text}"
         if extra_context and extra_context.strip():
             text = f"{text}\n\n[补充上下文]\n{extra_context.strip()}"
-        messages.append(HumanMessage(content=text))
-        return messages
+        return [HumanMessage(content=text)]
 
     # ---------------- 非流式 ----------------
 
     async def run(
         self,
         question: str,
-        history: Optional[List[ChatMessage]] = None,
+        user_id: str,
         use_search: Optional[bool] = None,
         extra_context: Optional[str] = None,
     ) -> AgentResult:
@@ -409,7 +435,7 @@ class Agent:
 
         Args:
             question: 用户问题。
-            history: 历史消息，由调用方维护。
+            user_id: 用户标识，映射为 checkpointer 的 ``thread_id``，用于隔离对话历史。
             use_search: 是否允许检索；``False`` 时切到不带工具的图。
             extra_context: 附加到问题末尾的补充上下文。
 
@@ -422,8 +448,11 @@ class Agent:
         """
         graph = self._pick_graph(use_search)
         knowledge_text = await self._knowledge_search(question)
-        messages = self._build_messages(question, history, extra_context, knowledge_text)
-        config = {"recursion_limit": self.settings.recursion_limit}
+        messages = self._build_input(question, extra_context, knowledge_text)
+        config = {
+            "configurable": {"thread_id": user_id},
+            "recursion_limit": self.settings.recursion_limit,
+        }
         started = time.perf_counter()
 
         try:
@@ -464,7 +493,7 @@ class Agent:
     async def stream(
         self,
         question: str,
-        history: Optional[List[ChatMessage]] = None,
+        user_id: str,
         use_search: Optional[bool] = None,
         extra_context: Optional[str] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
@@ -491,7 +520,7 @@ class Agent:
 
         Args:
             question: 用户问题。
-            history: 历史消息，由调用方维护。
+            user_id: 用户标识，映射为 checkpointer 的 ``thread_id``。
             use_search: 是否允许检索；``False`` 时切到不带工具的图。
             extra_context: 附加到问题末尾的补充上下文。
 
@@ -504,8 +533,11 @@ class Agent:
         """
         graph = self._pick_graph(use_search)
         knowledge_text = await self._knowledge_search(question)
-        messages = self._build_messages(question, history, extra_context, knowledge_text)
-        config = {"recursion_limit": self.settings.recursion_limit}
+        messages = self._build_input(question, extra_context, knowledge_text)
+        config = {
+            "configurable": {"thread_id": user_id},
+            "recursion_limit": self.settings.recursion_limit,
+        }
 
         answer_parts: List[str] = []
         sources: List[Source] = []

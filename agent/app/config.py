@@ -70,6 +70,7 @@ class Settings(BaseSettings):
     # ---------- Agent ----------
     recursion_limit: int = 12
     max_history_messages: int = 10
+    checkpoint_db_path: str = "data/checkpoint.db"
     request_timeout: float = 120.0
 
     # ---------- 知识库（Embedding + 向量检索） ----------

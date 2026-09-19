@@ -1,0 +1,47 @@
+
+
+修改目前rag模式
+
+第一点：
+很好的观察！核心原因是：系统提示词是编译时注入的，知识库是运行时查到的。
+
+时序冲突
+text
+
+
+
+进程启动（只一次）                  每次请求（N 次）
+─────────────────                  ─────────────
+_compile(tools)
+  │
+  ├─ prompt = build_system_prompt()     ← 此时还没有任何用户问题！
+  │
+  ├─ create_agent(                      ← 提示词被"烧"进图里
+  │       system_prompt=prompt,
+  │       ...
+  │   )
+  │
+  └─ self.graph = 编译好的图            ← 整个生命周期不变
+
+                                    Agent.run(question="天气怎么样")
+                                      │
+                                      ├─ _knowledge_search(question) ← 这时才知道查什么
+                                      │
+                                      └─ 知识结果只能注入到 HumanMessage
+                                         因为 system_prompt 已经在编译时固定了
+create_agent 的 system_prompt 参数只在编译时生效一次，编译完成后写死在图的节点里，没法每次请求动态改。
+
+所以知识库只能走 HumanMessage 注入路径（当前做法），build_system_prompt 的 knowledge_text 参数实际上是死代码，从来没有被调用过。
+
+那 build_system_prompt(knowledge_text) 是干嘛的？
+看函数所在文件 prompts.py#L52，它的设计意图应该是：将来如果换成"每次请求重新编译图"，就能把知识注入系统提示词。但目前单例编译的架构下，这个参数用不上。
+
+在 V3 改造中的影响
+V3 里 _build_input（原 _build_messages）继续承担知识注入角色，不改。如果你想让知识走系统提示词，需要改成"每次请求动态构图"——成本高收益小，不建议。
+
+要不要我把 build_system_prompt 的 knowledge_text 参数清理掉，避免误导？
+
+
+
+
+第二点：需要判断目前的请求需不需要走rag，把rag作为一个工具，而不是一个固定流程

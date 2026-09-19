@@ -104,6 +104,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     provider = build_search_provider(settings)
     app.state.settings = settings
     app.state.search_provider = provider
+    app.state._checkpointer_cm = None  # V3：shutdown 清理用
 
     # V2：知识库初始化
     knowledge_base = None
@@ -122,8 +123,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.knowledge_base = knowledge_base
     app.state.message_store = message_store
 
+    # V3：Checkpointer 持久化记忆
+    checkpointer = None
+    _checkpointer_cm = None  # 上下文管理器引用，shutdown 时退出
     try:
-        app.state.agent = Agent(settings, provider, knowledge_base)
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+        _checkpointer_cm = AsyncSqliteSaver.from_conn_string(settings.checkpoint_db_path)
+        checkpointer = await _checkpointer_cm.__aenter__()
+        await checkpointer.setup()
+        app.state.checkpointer = checkpointer
+        app.state._checkpointer_cm = _checkpointer_cm
+        logger.info("Checkpointer 就绪 path=%s", settings.checkpoint_db_path)
+    except Exception as exc:  # noqa: BLE001
+        app.state.checkpointer = None
+        app.state._checkpointer_cm = None
+        logger.error("Checkpointer 初始化失败: %s", exc)
+
+    try:
+        app.state.agent = Agent(settings, provider, knowledge_base, checkpointer)
         app.state.agent_error = None
         logger.info(
             "Agent 就绪 | 实现=%s | 模型=%s | 搜索=%s | 工具数=%d",
@@ -139,6 +157,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
+    if app.state._checkpointer_cm is not None:
+        await app.state._checkpointer_cm.__aexit__(None, None, None)
+        app.state._checkpointer_cm = None
     app.state.agent = None
 
 
@@ -296,7 +317,7 @@ async def ask(payload: AskRequest, request: Request) -> AskResponse:
         result = await asyncio.wait_for(
             agent.run(
                 question=payload.question,
-                history=payload.history,
+                user_id=payload.user_id,
                 use_search=payload.use_search,
                 extra_context=payload.extra_context,
             ),
@@ -356,7 +377,7 @@ async def stream(payload: AskRequest, request: Request) -> StreamingResponse:
         try:
             async for event in agent.stream(
                 question=payload.question,
-                history=payload.history,
+                user_id=payload.user_id,
                 use_search=payload.use_search,
                 extra_context=payload.extra_context,
             ):

@@ -1,4 +1,4 @@
-# Small Agent 后端
+# Agent 后端
 
 基于 **FastAPI + LangChain `create_agent` + DeepSeek** 的可联网问答服务。
 
@@ -11,7 +11,7 @@
 ## 目录结构
 
 ```
-small_agent/
+agent/
 ├── app/
 │   ├── main.py        # FastAPI 入口与路由
 │   ├── config.py      # 配置（pydantic-settings）
@@ -33,14 +33,8 @@ small_agent/
 ## 快速开始
 
 ```bash
-cd small_agent
+cd agent
 
-# 1. 创建虚拟环境
-python -m venv .venv
-.venv\Scripts\activate          # Windows
-# source .venv/bin/activate     # Linux / macOS
-
-# 2. 安装依赖
 pip install -r requirements.txt
 
 # 3. 配置
