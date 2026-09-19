@@ -36,16 +36,16 @@ class AskRequest(BaseModel):
 
     Attributes:
         question: 用户问题，必填且不能为空字符串（为空时框架自动返回 422）。
-        session_id: 会话标识。本轮仅透传、不做持久化，为后续多轮会话预留。
-        history: 历史消息列表，由**调用方**维护并在每次请求时回传。
+        user_id: 用户标识，用于隔离不同用户的对话历史（持久化到 SQLite）。
         use_search: 是否允许联网检索。``None``（缺省）表示采用服务端默认（允许）；
             显式传 ``False`` 时切到不带工具的图，Agent 退化为纯对话。
         extra_context: 附加到问题末尾的补充上下文，用于注入调用方已知的信息。
     """
 
+    model_config = {"extra": "forbid"}
+
     question: str = Field(..., min_length=1, description="用户问题")
-    session_id: Optional[str] = Field(default=None, description="会话标识，本轮仅透传不持久化")
-    history: List[ChatMessage] = Field(default_factory=list, description="历史消息，由调用方维护")
+    user_id: str = Field(..., min_length=1, description="用户标识，用于隔离不同用户的对话历史")
     use_search: Optional[bool] = Field(default=None, description="是否允许联网；None 表示用服务端默认（允许）")
     extra_context: Optional[str] = Field(default=None, description="附加到问题后的补充上下文")
 
